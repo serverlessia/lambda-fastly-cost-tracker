@@ -1,0 +1,153 @@
+name: Build and Publish
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+
+    - name: Install dependencies
+      run: |
+        cd src
+        pip install -r requirements.txt
+
+    - name: Test imports
+      run: |
+        cd src
+        python -c "from app import lambda_handler; print('✅ Import successful')"
+
+    - name: Install AWS SAM CLI
+      uses: aws-actions/setup-sam@v2
+
+    - name: Validate SAM template
+      run: sam validate
+
+    - name: Build SAM application
+      run: sam build
+
+    - name: Create SAR package
+      run: |
+        # Copy the built application
+        cp -r .aws-sam/build/* sar-package/
+        cp template.yaml sar-package/
+        cp README.md sar-package/
+        cp LICENSE sar-package/
+
+        # Create a zip file for SAR
+        cd sar-package
+        zip -r ../fastly-cost-tracker-sar.zip .
+        cd ..
+
+    - name: Upload SAR package
+      uses: actions/upload-artifact@v3
+      with:
+        name: sar-package
+        path: fastly-cost-tracker-sar.zip
+
+  publish-sar:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Download SAR package
+      uses: actions/download-artifact@v3
+      with:
+        name: sar-package
+        path: .
+
+    - name: Create public template
+      run: |
+        # Create a template that references GitHub release
+        cat > sar-template.yaml << 'EOF'
+        AWSTemplateFormatVersion: '2010-09-09'
+        Transform: AWS::Serverless-2016-10-31
+        Description: Fastly Cost Tracker Lambda Function
+
+        Parameters:
+          FastlyApiToken:
+            Type: String
+            Description: Fastly API token for authentication
+            NoEcho: true
+
+        Resources:
+          FastlyCostTrackerFunction:
+            Type: AWS::Serverless::Function
+            Properties:
+              CodeUri: https://github.com/serverlessia/lambda-fastly-cost-tracker/releases/download/${{ steps.get_version.outputs.version }}/fastly-cost-tracker-sar.zip
+              Handler: src/app.lambda_handler
+              Runtime: python3.13
+              Timeout: 300
+              MemorySize: 512
+              Environment:
+                Variables:
+                  FASTLY_API_TOKEN: !Ref FastlyApiToken
+              Policies:
+                - CloudWatchLogsFullAccess
+        EOF
+
+    - name: Get version from release
+      id: get_version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Using version: $VERSION"
+
+    - name: Upload template to release
+      run: |
+        gh release upload ${{ steps.get_version.outputs.version }} sar-template.yaml
+
+    - name: Publish to SAR
+      run: |
+        # Create or update the SAR application
+        aws serverlessrepo create-application \
+          --name "fastly-cost-tracker" \
+          --description "Fastly Cost Tracker Lambda Function" \
+          --author "serverlessia" \
+          --spdx-license-id "MIT" \
+          --readme-url "https://raw.githubusercontent.com/serverlessia/lambda-fastly-cost-tracker/main/README.md" \
+          --license-url "https://raw.githubusercontent.com/serverlessia/lambda-fastly-cost-tracker/main/LICENSE" \
+          --home-page-url "https://github.com/serverlessia/lambda-fastly-cost-tracker" \
+          --source-code-url "https://github.com/serverlessia/lambda-fastly-cost-tracker" \
+          || echo "Application may already exist"
+
+        # Get the application ID
+        APP_ID=$(aws serverlessrepo list-applications --query 'Applications[?Name==`fastly-cost-tracker`].ApplicationId' --output text)
+
+        if [ "$APP_ID" = "None" ]; then
+          echo "❌ Application not found"
+          exit 1
+        fi
+
+        echo "📦 Publishing version ${{ steps.get_version.outputs.version }} to SAR..."
+
+        # Create new version using GitHub release URL
+        aws serverlessrepo create-cloud-formation-change-set \
+          --application-id "$APP_ID" \
+          --semantic-version "${{ steps.get_version.outputs.version }}" \
+          --template-url "https://github.com/serverlessia/lambda-fastly-cost-tracker/releases/download/${{ steps.get_version.outputs.version }}/sar-template.yaml"
+
+        echo "✅ Successfully published to SAR!"
+        echo "🔗 Application ID: $APP_ID"
+        echo "📋 Version: ${{ steps.get_version.outputs.version }}"

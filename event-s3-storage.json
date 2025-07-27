@@ -1,0 +1,9 @@
+{
+  "from_date": "2025-07-20",
+  "to_date": "2025-07-27",
+  "detailed": false,
+  "include_billing": false,
+  "s3_bucket": "my-fastly-data-bucket",
+  "organization": "acme-corp",
+  "services": ["service-123", "service-456"]
+}

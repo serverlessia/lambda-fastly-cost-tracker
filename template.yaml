@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Fastly Cost Tracker Lambda Function
+
+  This application fetches Fastly usage and billing data, providing cost estimates
+  and usage reports for your Fastly services.
+
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: fastly-cost-tracker
+    Description: >
+      A Lambda function that fetches Fastly usage and billing data to provide cost estimates
+      and usage reports for your Fastly services. Perfect for monitoring and optimizing
+      your Fastly CDN costs.
+    Author: serverlessia
+    SpdxLicenseId: MIT
+    LicenseUrl: LICENSE
+    ReadmeUrl: README.md
+    Labels: ['fastly', 'cost-tracking', 'cdn', 'monitoring', 'lambda']
+    HomePageUrl: https://github.com/serverlessia/lambda-fastly-cost-tracker
+    SourceCodeUrl: https://github.com/serverlessia/lambda-fastly-cost-tracker
+    SemanticVersion: 1.0.0
+    ApplicationId: arn:aws:serverlessrepo:us-east-1:123456789012:applications/fastly-cost-tracker
+
+Parameters:
+  FastlyApiToken:
+    Type: String
+    Description: Fastly API token for authentication
+    NoEcho: true
+    MinLength: "1"
+    MaxLength: "100"
+
+Resources:
+  FastlyCostTrackerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Runtime: python3.13
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          FASTLY_API_TOKEN: !Ref FastlyApiToken
+      Policies:
+        - CloudWatchLogsFullAccess
+        - S3CrudPolicy:
+            BucketName: "*"
+
+Outputs:
+  FastlyCostTrackerFunction:
+    Description: "Fastly Cost Tracker Lambda Function ARN"
+    Value: !GetAtt FastlyCostTrackerFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FastlyCostTrackerFunction"
+
+  FastlyCostTrackerFunctionRole:
+    Description: "Implicit IAM Role created for Fastly Cost Tracker function"
+    Value: !GetAtt FastlyCostTrackerFunctionRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FastlyCostTrackerFunctionRole"
